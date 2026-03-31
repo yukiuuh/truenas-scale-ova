@@ -1,0 +1,118 @@
+[
+  {
+    "key": "truenas.hostname",
+    "value": "nas"
+  },
+  {
+    "key": "truenas.domain",
+    "value": "nested.lab"
+  },
+  {
+    "key": "truenas.nic0.ipv4.mode",
+    "value": "static"
+  },
+  {
+    "key": "truenas.nic0.ipv4.address",
+    "value": "192.168.1.100"
+  },
+  {
+    "key": "truenas.nic0.ipv4.prefixlen",
+    "value": "24"
+  },
+  {
+    "key": "truenas.nic0.mtu",
+    "value": "1500"
+  },
+  {
+    "key": "truenas.nic0.vlan_tag",
+    "value": ""
+  },
+  {
+    "key": "truenas.nic1.ipv4.mode",
+    "value": "static"
+  },
+  {
+    "key": "truenas.nic1.ipv4.address",
+    "value": "10.10.10.20"
+  },
+  {
+    "key": "truenas.nic1.ipv4.prefixlen",
+    "value": "24"
+  },
+  {
+    "key": "truenas.nic1.mtu",
+    "value": "9000"
+  },
+  {
+    "key": "truenas.nic1.vlan_tag",
+    "value": ""
+  },
+  {
+    "key": "truenas.nic2.ipv4.mode",
+    "value": "static"
+  },
+  {
+    "key": "truenas.nic2.ipv4.address",
+    "value": "10.10.20.20"
+  },
+  {
+    "key": "truenas.nic2.ipv4.prefixlen",
+    "value": "24"
+  },
+  {
+    "key": "truenas.nic2.mtu",
+    "value": "9000"
+  },
+  {
+    "key": "truenas.nic2.vlan_tag",
+    "value": ""
+  },
+  {
+    "key": "truenas.nic3.ipv4.mode",
+    "value": "static"
+  },
+  {
+    "key": "truenas.nic3.ipv4.address",
+    "value": "10.10.30.20"
+  },
+  {
+    "key": "truenas.nic3.ipv4.prefixlen",
+    "value": "24"
+  },
+  {
+    "key": "truenas.nic3.mtu",
+    "value": "9000"
+  },
+  {
+    "key": "truenas.nic3.vlan_tag",
+    "value": "130"
+  },
+  {
+    "key": "truenas.ipv4.gateway",
+    "value": "192.168.1.254"
+  },
+  {
+    "key": "truenas.dns.1",
+    "value": "192.168.1.254"
+  },
+  {
+    "key": "truenas.pool.auto_create",
+    "value": "true"
+  },
+  {
+    "key": "truenas.pool.name",
+    "value": "vol0"
+  },
+  {
+    "key": "truenas.pool.layout",
+    "value": "stripe"
+  },
+  {
+    "key": "truenas.pool.compression",
+    "value": "ZSTD"
+  },
+  {
+    "key": "truenas.pool.deduplication",
+    "value": "OFF"
+  }
+]

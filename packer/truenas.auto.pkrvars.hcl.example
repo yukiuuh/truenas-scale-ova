@@ -1,0 +1,13 @@
+vcenter_server      = "vcenter.lab.local"
+vcenter_username    = "administrator@vsphere.local"
+vcenter_password    = "REDACTED"
+vsphere_datacenter  = "DC1"
+vsphere_cluster     = "Lab"
+vsphere_datastore   = "vsanDatastore"
+vsphere_folder      = "Templates"
+vsphere_network     = "VM Network"
+vsphere_resource_pool = "Lab"
+
+vm_name             = "truenas-scale-25.10-vmware"
+packer_admin_password = "ChangeMe123!"
+iso_checksum        = "none"

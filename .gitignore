@@ -1,0 +1,9 @@
+output/
+dist/
+packer_cache/
+.packer.d/
+*.auto.pkrvars.hcl
+*.log
+__pycache__/
+*.pyc
+.env
