@@ -11,7 +11,7 @@ NS = {
     "vmw": "http://www.vmware.com/schema/ovf",
 }
 
-ET.register_namespace("", NS["ovf"])
+ET.register_namespace("ovf", NS["ovf"])
 ET.register_namespace("rasd", NS["rasd"])
 ET.register_namespace("vssd", NS["vssd"])
 ET.register_namespace("vmw", NS["vmw"])
@@ -78,10 +78,37 @@ def add_properties(section):
         prop.set(f"{{{NS['ovf']}}}description", description)
 
 
+def move_attr_to_ns(elem, attr_name, namespace):
+    value = elem.attrib.pop(attr_name, None)
+    if value is not None:
+        elem.set(f"{{{namespace}}}{attr_name}", value)
+
+
+def normalize_common_ovf_attributes(root):
+    ovf_attr_map = {
+        "File": ["id", "href", "size", "compression"],
+        "Disk": ["diskId", "capacity", "capacityAllocationUnits", "fileRef", "format", "populatedSize"],
+        "Network": ["name"],
+        "VirtualSystem": ["id"],
+        "OperatingSystemSection": ["id", "version"],
+        "AnnotationSection": ["required"],
+        "Item": ["required"],
+        "Property": ["key", "type", "userConfigurable", "qualifiers", "label", "description", "value"],
+    }
+    for local_name, attrs in ovf_attr_map.items():
+        for elem in root.findall(f".//ovf:{local_name}", NS):
+            for attr_name in attrs:
+                move_attr_to_ns(elem, attr_name, NS["ovf"])
+
+    for elem in root.findall(".//vmw:Config", NS) + root.findall(".//vmw:ExtraConfig", NS):
+        move_attr_to_ns(elem, "required", NS["vmw"])
+
+
 def main(path_str):
     path = Path(path_str)
     tree = ET.parse(path)
     root = tree.getroot()
+    normalize_common_ovf_attributes(root)
     virtual_system = root.find("ovf:VirtualSystem", NS)
     if virtual_system is None:
       raise SystemExit("VirtualSystem element not found")

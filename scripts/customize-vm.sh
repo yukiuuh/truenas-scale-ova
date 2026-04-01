@@ -131,6 +131,11 @@ mkdir -p ${GUEST_TMP_DIR}/guest-payload
 tar -C ${GUEST_TMP_DIR}/guest-payload -xzf ${GUEST_PAYLOAD_TGZ}
 ${GUEST_TMP_DIR}/guest-payload/guest/install-guest-customization.sh
 
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get clean || true
+fi
+rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/*
+
 EOF
 )"
 
