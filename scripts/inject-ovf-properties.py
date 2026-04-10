@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
+import re
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
-
-
-NS = {
-    "ovf": "http://schemas.dmtf.org/ovf/envelope/1",
-    "rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData",
-    "vssd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData",
-    "vmw": "http://www.vmware.com/schema/ovf",
-}
-
-ET.register_namespace("ovf", NS["ovf"])
-ET.register_namespace("rasd", NS["rasd"])
-ET.register_namespace("vssd", NS["vssd"])
-ET.register_namespace("vmw", NS["vmw"])
 
 
 PROPERTIES = [
@@ -48,6 +35,7 @@ PROPERTIES = [
     ("truenas.admin.password", "Admin Password", "Optional password reset for the built-in admin/root accounts."),
     ("truenas.ssh.password_auth", "SSH Password Auth", "Enable password-based SSH access. Default true."),
     ("truenas.pool.auto_create", "Auto Create Pool", "When true, create a pool from all non-boot disks on first boot."),
+    ("truenas.pool.disk_wait_timeout", "Pool Disk Wait Timeout", "Seconds to wait for non-boot disks when auto_create is true. Default 600."),
     ("truenas.pool.name", "Pool Name", "Pool name to create when auto_create is true."),
     ("truenas.pool.layout", "Pool Layout", "stripe, mirror, raidz1, raidz2, or raidz3."),
     ("truenas.pool.compression", "Pool Compression", "Compression for the root dataset, e.g. LZ4, ZSTD, OFF."),
@@ -56,68 +44,72 @@ PROPERTIES = [
 ]
 
 
-def ensure_product_section(virtual_system):
-    section = virtual_system.find("ovf:ProductSection", NS)
-    if section is None:
-        section = ET.SubElement(virtual_system, f"{{{NS['ovf']}}}ProductSection")
-        info = ET.SubElement(section, f"{{{NS['ovf']}}}Info")
-        info.text = "TrueNAS SCALE lab deployment properties"
-        product = ET.SubElement(section, f"{{{NS['ovf']}}}Product")
-        product.text = "TrueNAS SCALE Lab OVA"
-    return section
+def xml_escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
 
 
-def add_properties(section):
+def render_product_section(indent: str) -> str:
+    lines = [
+        f"{indent}<ProductSection>",
+        f"{indent}  <Info>TrueNAS lab deployment properties</Info>",
+        f"{indent}  <Product>TrueNAS CE</Product>",
+        f"{indent}  <Vendor>TrueNAS</Vendor>",
+        f"{indent}  <Version>25.10</Version>",
+    ]
     for key, label, description in PROPERTIES:
-        prop = ET.SubElement(section, f"{{{NS['ovf']}}}Property")
-        prop.set(f"{{{NS['ovf']}}}key", key)
-        prop.set(f"{{{NS['ovf']}}}type", "string")
-        prop.set(f"{{{NS['ovf']}}}userConfigurable", "true")
-        prop.set(f"{{{NS['ovf']}}}qualifiers", "MaxLen(65535)")
-        prop.set(f"{{{NS['ovf']}}}label", label)
-        prop.set(f"{{{NS['ovf']}}}description", description)
+        lines.extend(
+            [
+                f'{indent}  <Property ovf:key="{xml_escape(key)}" ovf:type="string" ovf:userConfigurable="true">',
+                f"{indent}    <Label>{xml_escape(label)}</Label>",
+                f"{indent}    <Description>{xml_escape(description)}</Description>",
+                f"{indent}  </Property>",
+            ]
+        )
+    lines.append(f"{indent}</ProductSection>")
+    return "\n".join(lines)
 
 
-def move_attr_to_ns(elem, attr_name, namespace):
-    value = elem.attrib.pop(attr_name, None)
-    if value is not None:
-        elem.set(f"{{{namespace}}}{attr_name}", value)
-
-
-def normalize_common_ovf_attributes(root):
-    ovf_attr_map = {
-        "File": ["id", "href", "size", "compression"],
-        "Disk": ["diskId", "capacity", "capacityAllocationUnits", "fileRef", "format", "populatedSize"],
-        "Network": ["name"],
-        "VirtualSystem": ["id"],
-        "OperatingSystemSection": ["id", "version"],
-        "AnnotationSection": ["required"],
-        "Item": ["required"],
-        "Property": ["key", "type", "userConfigurable", "qualifiers", "label", "description", "value"],
-    }
-    for local_name, attrs in ovf_attr_map.items():
-        for elem in root.findall(f".//ovf:{local_name}", NS):
-            for attr_name in attrs:
-                move_attr_to_ns(elem, attr_name, NS["ovf"])
-
-    for elem in root.findall(".//vmw:Config", NS) + root.findall(".//vmw:ExtraConfig", NS):
-        move_attr_to_ns(elem, "required", NS["vmw"])
-
-
-def main(path_str):
+def main(path_str: str) -> None:
     path = Path(path_str)
-    tree = ET.parse(path)
-    root = tree.getroot()
-    normalize_common_ovf_attributes(root)
-    virtual_system = root.find("ovf:VirtualSystem", NS)
-    if virtual_system is None:
-      raise SystemExit("VirtualSystem element not found")
+    text = path.read_text(encoding="utf-8")
 
-    section = ensure_product_section(virtual_system)
-    for existing in list(section.findall("ovf:Property", NS)):
-        section.remove(existing)
-    add_properties(section)
-    tree.write(path, encoding="utf-8", xml_declaration=True)
+    if "xmlns:ovf=" not in text:
+        raise SystemExit("OVF namespace prefix declaration is required in the source OVF")
+
+    text, count = re.subn(
+        r"(<VirtualHardwareSection\b)(?![^>]*\bovf:transport=)([^>]*>)",
+        r'\1 ovf:transport="com.vmware.guestInfo"\2',
+        text,
+        count=1,
+    )
+    if count == 0 and 'ovf:transport="com.vmware.guestInfo"' not in text:
+        raise SystemExit("VirtualHardwareSection start tag not found")
+
+    text, _ = re.subn(
+        r"\n?[ \t]*<ProductSection>.*?</ProductSection>[ \t]*\n?",
+        "\n",
+        text,
+        count=1,
+        flags=re.DOTALL,
+    )
+
+    match = re.search(r"(?P<indent>[ \t]*)</VirtualSystem>", text)
+    if match is None:
+        raise SystemExit("VirtualSystem closing tag not found")
+
+    section = render_product_section(match.group("indent"))
+    insert_at = match.start()
+    if insert_at > 0 and text[insert_at - 1] != "\n":
+        section = "\n" + section
+    text = text[:insert_at] + section + "\n" + text[insert_at:]
+
+    path.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # TrueNAS SCALE Lab OVA
 
-This repository builds a TrueNAS SCALE 25.10 lab template with `vsphere-iso` and `packer`, injects first-boot customization through VMware Tools guest operations in a `shell-local` post-processor, and then exports the VM as an OVA. The template includes only the boot disk. If you want a storage pool, add data disks after deployment and let first boot create the pool from those extra disks.
+This repository builds a TrueNAS SCALE 25.10 lab template with `vsphere-iso` and `packer`, injects first-boot customization through VMware Tools guest operations in chained `shell-local` post-processors, exports an OVF package with `govc`, and then injects OVF properties and repacks the result as an OVA. The template includes only the boot disk. If you want a storage pool, add data disks after deployment and let first boot create the pool from those extra disks.
 
 ## What This Image Includes
 
@@ -11,6 +11,7 @@ This repository builds a TrueNAS SCALE 25.10 lab template with `vsphere-iso` and
 - Password-based SSH enabled by default
 - Local admin password authentication kept available for TrueNAS API usage
 - `truenas.init_script` execution from OVF environment data
+- Nested virtualization enabled in the baked VM configuration
 
 ## Assumptions
 
@@ -82,7 +83,7 @@ make validate
 make build
 ```
 
-`make build` uses `packer build -force`, so an existing VM with the same name is destroyed and rebuilt. After the build completes, `scripts/customize-vm.sh` runs automatically as a post-processor and injects the first-boot service into the guest. The resulting lab template has baked-in `truenas_admin` and `root` credentials, and both initial passwords are set to the value of `packer_admin_password`.
+`make build` uses `packer build -force`, so an existing VM with the same name is destroyed and rebuilt. During the build, `scripts/customize-vm.sh`, `scripts/zerofill-vm.sh`, and `scripts/export-ova.sh` run as chained `shell-local` post-processors. `scripts/export-ova.sh` exports the OVF package with `govc`, injects OVF properties, and repacks the result as an OVA. The resulting lab template has baked-in `truenas_admin` and `root` credentials, and both initial passwords are set to the value of `packer_admin_password`.
 
 ## 2. Re-run Guest Customization Manually
 
@@ -100,11 +101,7 @@ This customization flow uploads a payload into `/var/tmp`, enables the `root` pa
 make export
 ```
 
-By default, `make export` runs a guest-side boot disk zero-fill pass before powering off and exporting the VM. This now happens in a dedicated step instead of the build post-processor. Disable it only if needed:
-
-```bash
-make export ZERO_FILL_BOOT_DISK=0
-```
+`make export` re-runs the `govc` export and OVA packaging flow for an existing VM. In the normal flow, `make build` already produces the final OVA.
 
 ## 4. Deploy the OVA
 
@@ -154,13 +151,25 @@ make deploy \
 
 If you set `DATA_DISK_SIZES_GB='200,200,500'`, those data disks are attached in addition to the OVA boot disk.
 
+## 5. Terraform Example for VCD
+
+A sample Terraform configuration that deploys the catalog template as a VM inside a `vApp` is available under [deploy/terraform/vcd-vapp-vm-example](/home/yh012243/Documents/truenas-scale-ova/deploy/terraform/vcd-vapp-vm-example).
+
+It covers:
+
+- Looking up the catalog `vApp Template`
+- Creating a `vApp`
+- Deploying a VM from that template with `vcd_vapp_vm`
+- Passing TrueNAS OVF properties through `guest_properties`
+- Adding post-deploy data disks with `vcd_vm_internal_disk`
+
 Run the full pipeline with:
 
 ```bash
 make all
 ```
 
-`customize` and `export` read `vm_name` and vCenter connection details from `PKR_VAR_FILE` by default. Override them with environment variables if needed.
+`customize` reads `vm_name` and vCenter connection details from `PKR_VAR_FILE` by default. `export` only needs the exported OVF package that `make build` already created.
 
 ```bash
 make build PKR_VAR_FILE=packer/lab.auto.pkrvars.hcl
@@ -217,6 +226,7 @@ The export flow does the following:
 - `truenas.admin.password`
 - `truenas.ssh.password_auth`
 - `truenas.pool.auto_create`
+- `truenas.pool.disk_wait_timeout`
 - `truenas.pool.name`
 - `truenas.pool.layout`
 - `truenas.pool.compression`
@@ -258,13 +268,14 @@ truenas.nic3.vlan_tag = 130
 
 ```text
 truenas.pool.auto_create = true
+truenas.pool.disk_wait_timeout = 600
 truenas.pool.name = vol0
 truenas.pool.layout = stripe
 truenas.pool.compression = ZSTD
 truenas.pool.deduplication = OFF
 ```
 
-This creates `vol0` from all disks that are not part of the boot pool, then applies compression and deduplication settings to the root dataset.
+This waits up to `truenas.pool.disk_wait_timeout` seconds, defaulting to 600 seconds when omitted, for enough disks that are not part of the boot pool. It then creates `vol0` from those disks and applies compression and deduplication settings to the root dataset. If the timeout expires before enough disks are visible, first-boot customization fails without writing its completion stamp so it can be retried after the disks are attached.
 
 ### Init Script Example
 
@@ -323,7 +334,7 @@ The Broadcom VMware Cloud Director installation guide shows the transfer share a
 - There is no confirmed built-in TrueNAS mechanism for directly applying OVF properties to network configuration and init scripts, so this project installs a custom first-boot service inside the OVA.
 - Guest-side package installation and first-boot service placement happen during `packer build` in a post-processor. Only OVF descriptor editing is left for the export phase.
 - SSH enablement uses `ssh.update` and `service.update` / `service.control`, and password-based SSH user settings use `user.update`.
-- Pool creation uses `pool.create`, and the boot pool disks are excluded by parsing `zpool status -P boot-pool`.
+- Pool creation uses `pool.create`, and the boot pool disks are excluded by parsing `zpool status -P boot-pool`. When `truenas.pool.auto_create` is true, first boot waits for enough non-boot disks before creating the pool so post-power-on HotAdd data disks can be used.
 - Do not commit `packer/truenas.auto.pkrvars.hcl`, `dist/`, or other local build artifacts. The repository should only contain the example var file and source files.
 
 ## References

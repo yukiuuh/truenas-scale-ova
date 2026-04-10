@@ -52,6 +52,11 @@ variable "vm_name" {
   default = "truenas-scale-25.10-lab"
 }
 
+variable "vm_version" {
+  type    = number
+  default = 20
+}
+
 variable "vm_guest_os_type" {
   type    = string
   default = "debian12_64Guest"
@@ -135,4 +140,9 @@ variable "packer_admin_password" {
 variable "installer_boot_command" {
   type    = list(string)
   default = []
+}
+
+variable "ova_output_dir" {
+  type    = string
+  default = "dist"
 }

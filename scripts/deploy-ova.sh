@@ -195,11 +195,14 @@ govc import.ova "${IMPORT_ARGS[@]}" "${OVA_PATH}"
 
 if [[ -n "${DATA_DISK_SIZES_GB}" ]]; then
   IFS=',' read -r -a disk_sizes <<< "${DATA_DISK_SIZES_GB}"
+  disk_index=1
   for size_gb in "${disk_sizes[@]}"; do
     size_gb="$(printf '%s' "${size_gb}" | xargs)"
     [[ -z "${size_gb}" ]] && continue
     log "adding data disk ${size_gb}G to ${VM_NAME}"
-    govc vm.disk.create -vm "${VM_NAME}" -name "data-${size_gb}g-$(date +%s)" -size "${size_gb}G" -ds "${DATASTORE}"
+    disk_name="${VM_NAME}/data-disk-${disk_index}.vmdk"
+    govc vm.disk.create -vm "${VM_NAME}" -name "${disk_name}" -size "${size_gb}G" -ds "${DATASTORE}"
+    disk_index=$((disk_index + 1))
   done
 fi
 

@@ -1,9 +1,9 @@
 locals {
-  installer_disk_screen_wait_token     = format("<wait%s>", trimsuffix(var.installer_disk_screen_wait, "s"))
-  installer_warning_wait_token         = format("<wait%s>", trimsuffix(var.installer_warning_wait, "s"))
-  installer_admin_user_wait_token      = format("<wait%s>", trimsuffix(var.installer_admin_user_wait, "s"))
-  installer_password_screen_wait_token = format("<wait%s>", trimsuffix(var.installer_password_screen_wait, "s"))
-  installer_install_complete_wait_token = format("<wait%s>", trimsuffix(var.installer_install_complete_wait, "s"))
+  installer_disk_screen_wait_token       = format("<wait%s>", trimsuffix(var.installer_disk_screen_wait, "s"))
+  installer_warning_wait_token           = format("<wait%s>", trimsuffix(var.installer_warning_wait, "s"))
+  installer_admin_user_wait_token        = format("<wait%s>", trimsuffix(var.installer_admin_user_wait, "s"))
+  installer_password_screen_wait_token   = format("<wait%s>", trimsuffix(var.installer_password_screen_wait, "s"))
+  installer_install_complete_wait_token  = format("<wait%s>", trimsuffix(var.installer_install_complete_wait, "s"))
   installer_post_install_menu_wait_token = format("<wait%s>", trimsuffix(var.installer_post_install_menu_wait, "s"))
 }
 
@@ -30,6 +30,7 @@ source "vsphere-iso" "truenas_scale" {
   host          = var.vsphere_host != "" ? var.vsphere_host : null
 
   vm_name       = var.vm_name
+  vm_version    = var.vm_version
   guest_os_type = var.vm_guest_os_type
   firmware      = var.vm_firmware
 
@@ -37,7 +38,8 @@ source "vsphere-iso" "truenas_scale" {
   RAM                  = var.vm_memory_mb
   RAM_reserve_all      = false
   disk_controller_type = ["pvscsi"]
-  remove_cdrom         = true
+  remove_cdrom         = false
+  NestedHV             = true
 
   network_adapters {
     network      = var.vsphere_network
@@ -66,7 +68,6 @@ source "vsphere-iso" "truenas_scale" {
 
   iso_urls     = [var.iso_url]
   iso_checksum = var.iso_checksum
-  cdrom_type   = "sata"
 
   boot_wait = var.boot_wait
   boot_command = length(var.installer_boot_command) > 0 ? var.installer_boot_command : concat(
@@ -96,11 +97,8 @@ source "vsphere-iso" "truenas_scale" {
 
   notes = <<-EOT
     TrueNAS SCALE lab template.
-    Includes only the boot disk.
     truenas_admin password: ${var.packer_admin_password}
     root password: ${var.packer_admin_password}
-    Password-based SSH/API access for truenas_admin is enabled.
-    If you want automatic pool creation on first boot, add one or more data disks before power on.
   EOT
 }
 
@@ -120,6 +118,35 @@ build {
       format("GOVC_INSECURE=%s", var.insecure_connection ? "1" : "0"),
       "GOVC_DATACENTER=${var.vsphere_datacenter}",
       "GUEST_PASSWORD=${var.packer_admin_password}",
+    ]
+  }
+
+  post-processor "shell-local" {
+    inline = [
+      "bash ./scripts/zerofill-vm.sh '${var.vm_name}'",
+    ]
+
+    environment_vars = [
+      format("GOVC_URL=https://%s", var.vcenter_server),
+      "GOVC_USERNAME=${var.vcenter_username}",
+      "GOVC_PASSWORD=${var.vcenter_password}",
+      format("GOVC_INSECURE=%s", var.insecure_connection ? "1" : "0"),
+      "GOVC_DATACENTER=${var.vsphere_datacenter}",
+      "GUEST_PASSWORD=${var.packer_admin_password}",
+    ]
+  }
+
+  post-processor "shell-local" {
+    inline = [
+      "bash ./scripts/export-ova.sh '${var.vm_name}' '${var.ova_output_dir}'",
+    ]
+
+    environment_vars = [
+      format("GOVC_URL=https://%s", var.vcenter_server),
+      "GOVC_USERNAME=${var.vcenter_username}",
+      "GOVC_PASSWORD=${var.vcenter_password}",
+      format("GOVC_INSECURE=%s", var.insecure_connection ? "1" : "0"),
+      "GOVC_DATACENTER=${var.vsphere_datacenter}",
     ]
   }
 }

@@ -7,21 +7,16 @@ VM_NAME="${1:-${VM_NAME:-$(default_vm_name_from_pkrvars)}}"
 OUTPUT_DIR="$(realpath -m "${2:-${OVA_OUTPUT_DIR:-dist}}")"
 EXPORT_DIR="${OUTPUT_DIR}/${VM_NAME}.export"
 OVA_PATH="${OUTPUT_DIR}/${VM_NAME}.ova"
-: "${ZERO_FILL_BOOT_DISK:=1}"
-
-export_govc_from_pkrvars
 
 mkdir -p "${OUTPUT_DIR}"
 rm -rf "${EXPORT_DIR}"
 rm -f "${OVA_PATH}"
+
+echo "[export-ova] powering off ${VM_NAME}"
+govc vm.power -off -force "${VM_NAME}" >/dev/null 2>&1 || true
+
+echo "[export-ova] exporting OVF for ${VM_NAME}"
 mkdir -p "${EXPORT_DIR}"
-
-if [[ "${ZERO_FILL_BOOT_DISK}" == "1" ]]; then
-  bash "${ROOT_DIR}/scripts/zerofill-vm.sh" "${VM_NAME}"
-fi
-
-govc vm.power -off "${VM_NAME}" >/dev/null 2>&1 || true
-
 pushd "${EXPORT_DIR}" >/dev/null
 govc export.ovf -vm "${VM_NAME}" .
 popd >/dev/null
@@ -31,6 +26,8 @@ if [[ -z "${OVF_PATH}" ]]; then
   echo "could not find exported OVF in ${EXPORT_DIR}" >&2
   exit 1
 fi
+
+cp "${OVF_PATH}" "${OVF_PATH}.original"
 
 python3 "${ROOT_DIR}/scripts/inject-ovf-properties.py" "${OVF_PATH}"
 

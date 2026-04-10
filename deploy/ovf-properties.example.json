@@ -100,6 +100,10 @@
     "value": "true"
   },
   {
+    "key": "truenas.pool.disk_wait_timeout",
+    "value": "600"
+  },
+  {
     "key": "truenas.pool.name",
     "value": "vol0"
   },

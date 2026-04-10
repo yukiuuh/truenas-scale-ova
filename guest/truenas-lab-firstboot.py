@@ -12,6 +12,15 @@ STATE_DIR = Path("/var/lib/truenas-lab")
 STAMP_FILE = STATE_DIR / "firstboot-complete"
 LOG_FILE = STATE_DIR / "firstboot.log"
 SCRIPT_FILE = STATE_DIR / "ovf-script.sh"
+DEFAULT_POOL_DISK_WAIT_TIMEOUT = 600
+POOL_DISK_WAIT_INTERVAL = 5
+POOL_LAYOUT_MIN_DISKS = {
+    "STRIPE": 1,
+    "MIRROR": 2,
+    "RAIDZ1": 2,
+    "RAIDZ2": 3,
+    "RAIDZ3": 4,
+}
 
 
 def log(message: str) -> None:
@@ -144,6 +153,19 @@ def bool_prop(properties, key, default=False):
 
 def str_prop(properties, key, default=""):
     return properties.get(key, default).strip()
+
+
+def int_prop(properties, key, default=0, minimum=None):
+    value = str_prop(properties, key)
+    if value == "":
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return parsed
 
 
 def vlan_tag_prop(properties, key):
@@ -407,34 +429,53 @@ def available_data_disks():
     return disks
 
 
+def wait_for_data_disks(minimum, timeout=DEFAULT_POOL_DISK_WAIT_TIMEOUT, interval=POOL_DISK_WAIT_INTERVAL):
+    deadline = time.time() + timeout
+    last_logged_disks = None
+
+    log(f"waiting up to {timeout}s for at least {minimum} extra data disk(s)")
+    while True:
+        disks = available_data_disks()
+        if len(disks) >= minimum:
+            log(f"found {len(disks)} extra data disk(s): {', '.join(disks)}")
+            return disks
+
+        if disks != last_logged_disks:
+            disk_list = ", ".join(disks) if disks else "none"
+            log(f"waiting for extra data disks: found {len(disks)}/{minimum} ({disk_list})")
+            last_logged_disks = list(disks)
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            disk_list = ", ".join(disks) if disks else "none"
+            raise RuntimeError(
+                f"Timed out waiting {timeout}s for at least {minimum} extra data disk(s); "
+                f"found {len(disks)} ({disk_list})"
+            )
+
+        time.sleep(min(interval, remaining))
+
+
 def maybe_create_pool(properties):
     if not bool_prop(properties, "truenas.pool.auto_create", False):
         return
 
     pool_name = str_prop(properties, "truenas.pool.name", "vol0")
     layout = str_prop(properties, "truenas.pool.layout", "stripe").upper()
-    disks = available_data_disks()
-
-    if not disks:
-        log("no extra data disks found, skipping pool creation")
-        return
+    disk_wait_timeout = int_prop(
+        properties,
+        "truenas.pool.disk_wait_timeout",
+        DEFAULT_POOL_DISK_WAIT_TIMEOUT,
+        minimum=0,
+    )
 
     existing = midclt("pool.query") or []
     if any(pool.get("name") == pool_name for pool in existing):
         log(f"pool {pool_name} already exists, skipping creation")
         return
 
-    valid_layout = {
-        "STRIPE": 1,
-        "MIRROR": 2,
-        "RAIDZ1": 2,
-        "RAIDZ2": 3,
-        "RAIDZ3": 4,
-    }
-    minimum = valid_layout.get(layout, 1)
-    if len(disks) < minimum:
-        log(f"pool layout {layout} needs at least {minimum} disks, found {len(disks)}")
-        return
+    minimum = POOL_LAYOUT_MIN_DISKS.get(layout, 1)
+    disks = wait_for_data_disks(minimum, timeout=disk_wait_timeout)
 
     payload = {
         "name": pool_name,
