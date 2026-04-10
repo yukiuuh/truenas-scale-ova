@@ -16,10 +16,15 @@ ZVOL2_NAME="${ZVOL2_NAME:-iscsi02}"
 ZVOL1_SIZE_GIB="${ZVOL1_SIZE_GIB:-}"
 ZVOL2_SIZE_GIB="${ZVOL2_SIZE_GIB:-}"
 ZVOL_DEFAULT_PERCENT="${ZVOL_DEFAULT_PERCENT:-90}"
-ZVOL_VOLBLOCKSIZE="${ZVOL_VOLBLOCKSIZE:-16K}"
+ZVOL_VOLBLOCKSIZE="${ZVOL_VOLBLOCKSIZE:-128K}"
 ZVOL_SPARSE="${ZVOL_SPARSE:-1}"
 ZVOL_COMPRESSION="${ZVOL_COMPRESSION:-ZSTD}"
 FORCE_SIZE="${FORCE_SIZE:-1}"
+
+# ZVOL_VOLBLOCKSIZE is the ZFS backing allocation size. The iSCSI extent
+# blocksize below is the initiator-facing logical sector size for ESXi/VMFS.
+ISCSI_EXTENT_BLOCKSIZE="${ISCSI_EXTENT_BLOCKSIZE:-512}"
+ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING="${ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING:-0}"
 
 NFS_DATASET_NAME="${NFS_DATASET_NAME:-share01}"
 NFS_RECORDSIZE="${NFS_RECORDSIZE:-1M}"
@@ -234,7 +239,7 @@ JSON
 ensure_zvol() {
   local dataset="${1}"
   local size_gib="${2}"
-  local volblocksize="${3:-16K}"
+  local volblocksize="${3:-128K}"
   local bytes=$((size_gib * 1024 * 1024 * 1024))
   local sparse=false
   local force_size=false
@@ -264,7 +269,7 @@ JSON
     wait_for_job_chain "${maybe_job}" >/dev/null
   fi
   wait_for_resource "zvol ${dataset}" "zfs list -H '${dataset}'"
-  log "created zvol ${dataset} (${size_gib} GiB, sparse=${sparse}, force_size=${force_size}, compression=${ZVOL_COMPRESSION})"
+  log "created zvol ${dataset} (${size_gib} GiB, volblocksize=${volblocksize}, sparse=${sparse}, force_size=${force_size}, compression=${ZVOL_COMPRESSION})"
 }
 
 find_iscsi_disk_choice() {
@@ -380,6 +385,8 @@ JSON
 ensure_iscsi_extent() {
   local name="${1}"
   local disk_choice="${2}"
+  local blocksize="${3:-512}"
+  local pblocksize=false
 
   local existing
   existing="$(iscsi_extent_id_by_name "${name}" 2>/dev/null || true)"
@@ -388,9 +395,13 @@ ensure_iscsi_extent() {
     return
   fi
 
+  if [[ "${ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING}" == "1" ]]; then
+    pblocksize=true
+  fi
+
   local create_result
   create_result="$(midclt call iscsi.extent.create "$(cat <<JSON
-{"name":"${name}","type":"DISK","disk":"${disk_choice}","blocksize":4096,"enabled":true}
+{"name":"${name}","type":"DISK","disk":"${disk_choice}","blocksize":${blocksize},"pblocksize":${pblocksize},"enabled":true}
 JSON
 )"
   )"
@@ -398,6 +409,7 @@ JSON
   created_id="$(printf '%s\n' "${create_result}" | json_id)"
   require_value "created iSCSI extent id for ${name}" "${created_id}"
   wait_for_resource "iSCSI extent ${name}" "iscsi_extent_id_by_name '${name}'"
+  log "created iSCSI extent ${name} (blocksize=${blocksize}, pblocksize=${pblocksize})"
   printf '%s\n' "${created_id}"
 }
 
@@ -530,24 +542,26 @@ NEED_START_NFS=0
 NEED_START_SSH=0
 
 if [[ "${ENABLE_ISCSI}" == "1" ]]; then
-  ensure_filesystem_dataset "${POOL_NAME}/iscsi" GENERIC INHERIT 1M "${ZVOL_COMPRESSION}"
-  ensure_zvol "${POOL_NAME}/iscsi/${ZVOL1_NAME}" "${ZVOL1_SIZE_GIB}" "${ZVOL_VOLBLOCKSIZE}"
-  ensure_zvol "${POOL_NAME}/iscsi/${ZVOL2_NAME}" "${ZVOL2_SIZE_GIB}" "${ZVOL_VOLBLOCKSIZE}"
+  ZVOL1_DATASET="${POOL_NAME}/${ZVOL1_NAME}"
+  ZVOL2_DATASET="${POOL_NAME}/${ZVOL2_NAME}"
+
+  ensure_zvol "${ZVOL1_DATASET}" "${ZVOL1_SIZE_GIB}" "${ZVOL_VOLBLOCKSIZE}"
+  ensure_zvol "${ZVOL2_DATASET}" "${ZVOL2_SIZE_GIB}" "${ZVOL_VOLBLOCKSIZE}"
 
   PORTAL_ID="$(ensure_iscsi_portal "${NIC1_IP}" "${NIC2_IP}")"
   require_value "iSCSI portal id" "${PORTAL_ID}"
   log "using iSCSI portal id ${PORTAL_ID}"
 
-  DISK1_CHOICE="$(find_iscsi_disk_choice "${POOL_NAME}/iscsi/${ZVOL1_NAME}")"
-  DISK2_CHOICE="$(find_iscsi_disk_choice "${POOL_NAME}/iscsi/${ZVOL2_NAME}")"
-  require_value "disk choice for ${POOL_NAME}/iscsi/${ZVOL1_NAME}" "${DISK1_CHOICE}"
-  require_value "disk choice for ${POOL_NAME}/iscsi/${ZVOL2_NAME}" "${DISK2_CHOICE}"
+  DISK1_CHOICE="$(find_iscsi_disk_choice "${ZVOL1_DATASET}")"
+  DISK2_CHOICE="$(find_iscsi_disk_choice "${ZVOL2_DATASET}")"
+  require_value "disk choice for ${ZVOL1_DATASET}" "${DISK1_CHOICE}"
+  require_value "disk choice for ${ZVOL2_DATASET}" "${DISK2_CHOICE}"
 
   TARGET_PREFIX="${POOL_NAME//[^a-zA-Z0-9]/}"
   TARGET1_ID="$(ensure_iscsi_target "${TARGET_PREFIX}lun01" "${POOL_NAME}-lun01" "${PORTAL_ID}")"
   TARGET2_ID="$(ensure_iscsi_target "${TARGET_PREFIX}lun02" "${POOL_NAME}-lun02" "${PORTAL_ID}")"
-  EXTENT1_ID="$(ensure_iscsi_extent "${TARGET_PREFIX}lun01" "${DISK1_CHOICE}")"
-  EXTENT2_ID="$(ensure_iscsi_extent "${TARGET_PREFIX}lun02" "${DISK2_CHOICE}")"
+  EXTENT1_ID="$(ensure_iscsi_extent "${TARGET_PREFIX}lun01" "${DISK1_CHOICE}" "${ISCSI_EXTENT_BLOCKSIZE}")"
+  EXTENT2_ID="$(ensure_iscsi_extent "${TARGET_PREFIX}lun02" "${DISK2_CHOICE}" "${ISCSI_EXTENT_BLOCKSIZE}")"
   require_value "iSCSI target id ${TARGET_PREFIX}lun01" "${TARGET1_ID}"
   require_value "iSCSI target id ${TARGET_PREFIX}lun02" "${TARGET2_ID}"
   require_value "iSCSI extent id ${TARGET_PREFIX}lun01" "${EXTENT1_ID}"

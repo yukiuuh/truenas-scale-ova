@@ -289,8 +289,11 @@ The main tunables are:
 - `ZVOL1_SIZE_GIB`
 - `ZVOL2_SIZE_GIB`
 - `ZVOL_DEFAULT_PERCENT`
+- `ZVOL_VOLBLOCKSIZE`
 - `ZVOL_SPARSE`
 - `ZVOL_COMPRESSION`
+- `ISCSI_EXTENT_BLOCKSIZE`
+- `ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING`
 - `FORCE_SIZE`
 - `NFS_DATASET_NAME`
 - `NFS_NETWORKS`
@@ -303,6 +306,9 @@ The sample uses these defaults:
 
 - zvols are thin-provisioned with `ZVOL_SPARSE=1`
 - zvol compression defaults to `ZSTD`
+- iSCSI zvols are created directly under the pool as `${POOL_NAME}/${ZVOL1_NAME}` and `${POOL_NAME}/${ZVOL2_NAME}`
+- iSCSI zvols default to `ZVOL_VOLBLOCKSIZE=128K`; this is the ZFS backing block size, not the SCSI logical sector size reported to ESXi
+- iSCSI extents default to `ISCSI_EXTENT_BLOCKSIZE=512` and `ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING=0`, matching TrueNAS' VMware-oriented 512-byte logical block behavior and avoiding exposure of the zvol block size as the physical block size
 - `FORCE_SIZE=1` enables the UI-equivalent `Force size` behavior
 - `sparse` and `force_size` are independent toggles
 - if `ZVOL1_SIZE_GIB` and `ZVOL2_SIZE_GIB` are empty, each LUN defaults to `ZVOL_DEFAULT_PERCENT` of total pool size, which is `90` by default
@@ -334,3 +340,5 @@ The Broadcom VMware Cloud Director installation guide shows the transfer share a
 - TrueNAS API `network.configuration.update`: https://api.truenas.com/v25.10/api_methods_network.configuration.update.html
 - TrueNAS API `interface.update`: https://api.truenas.com/v25.10/api_methods_interface.update.html
 - TrueNAS API `pool.create`: https://api.truenas.com/v25.10.0/api_methods_pool.create.html
+- TrueNAS API `pool.dataset.create`: https://api.truenas.com/v25.10/api_methods_pool.dataset.create.html
+- TrueNAS API `iscsi.extent.create`: https://api.truenas.com/v25.10/api_methods_iscsi.extent.create.html
