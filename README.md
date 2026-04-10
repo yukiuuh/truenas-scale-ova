@@ -151,18 +151,6 @@ make deploy \
 
 If you set `DATA_DISK_SIZES_GB='200,200,500'`, those data disks are attached in addition to the OVA boot disk.
 
-## 5. Terraform Example for VCD
-
-A sample Terraform configuration that deploys the catalog template as a VM inside a `vApp` is available under [deploy/terraform/vcd-vapp-vm-example](/home/yh012243/Documents/truenas-scale-ova/deploy/terraform/vcd-vapp-vm-example).
-
-It covers:
-
-- Looking up the catalog `vApp Template`
-- Creating a `vApp`
-- Deploying a VM from that template with `vcd_vapp_vm`
-- Passing TrueNAS OVF properties through `guest_properties`
-- Adding post-deploy data disks with `vcd_vm_internal_disk`
-
 Run the full pipeline with:
 
 ```bash
