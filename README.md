@@ -278,6 +278,7 @@ A practical example is provided in [deploy/init-script.storage-services.example.
 - `ENABLE_ISCSI`
 - `ENABLE_NFS`
 - `ENABLE_VCD_TRANSFER_NFS`
+- `ENABLE_WEBUI_SESSION_TIMEOUT`
 
 The main tunables are:
 
@@ -293,8 +294,10 @@ The main tunables are:
 - `ZVOL_SPARSE`
 - `ZVOL_COMPRESSION`
 - `ISCSI_EXTENT_BLOCKSIZE`
-- `ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING`
+- `ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING`
 - `FORCE_SIZE`
+- `WEBUI_SESSION_TIMEOUT_SECONDS`
+- `WEBUI_SESSION_TIMEOUT_USERS`
 - `NFS_DATASET_NAME`
 - `NFS_NETWORKS`
 - `VCD_TRANSFER_DATASET_NAME`
@@ -308,10 +311,11 @@ The sample uses these defaults:
 - zvol compression defaults to `ZSTD`
 - iSCSI zvols are created directly under the pool as `${POOL_NAME}/${ZVOL1_NAME}` and `${POOL_NAME}/${ZVOL2_NAME}`
 - iSCSI zvols default to `ZVOL_VOLBLOCKSIZE=128K`; this is the ZFS backing block size, not the SCSI logical sector size reported to ESXi
-- iSCSI extents default to `ISCSI_EXTENT_BLOCKSIZE=512` and `ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING=0`, matching TrueNAS' VMware-oriented 512-byte logical block behavior and avoiding exposure of the zvol block size as the physical block size
+- iSCSI extents default to `ISCSI_EXTENT_BLOCKSIZE=512` and `ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING=1`, matching the TrueNAS UI's VMware-oriented 512-byte logical block behavior and checked `Disable Physical Block Size Reporting`
 - `FORCE_SIZE=1` enables the UI-equivalent `Force size` behavior
 - `sparse` and `force_size` are independent toggles
 - if `ZVOL1_SIZE_GIB` and `ZVOL2_SIZE_GIB` are empty, each LUN defaults to `ZVOL_DEFAULT_PERCENT` of total pool size, which is `90` by default
+- Web UI session timeout defaults to the UI maximum, `WEBUI_SESSION_TIMEOUT_SECONDS=2147482`, and is applied to `WEBUI_SESSION_TIMEOUT_USERS=truenas_admin` by default; the script caps this value to the current middleware authenticator assurance level so reconnect tokens do not expire before the UI idle timer
 - the regular NFS share defaults to `NFS_MAPROOT_USER=root`, `NFS_MAPROOT_GROUP=wheel`, and `security=["SYS"]` so it can be used as a vSphere NFS datastore
 - `mapall` is empty by default for the regular NFS share
 - filesystem datasets do not need an extra thin-provisioning setting

@@ -5,17 +5,21 @@ set -euo pipefail
 ENABLE_ISCSI="${ENABLE_ISCSI:-1}"
 ENABLE_NFS="${ENABLE_NFS:-1}"
 ENABLE_VCD_TRANSFER_NFS="${ENABLE_VCD_TRANSFER_NFS:-1}"
+ENABLE_WEBUI_SESSION_TIMEOUT="${ENABLE_WEBUI_SESSION_TIMEOUT:-1}"
 
 POOL_NAME="${POOL_NAME:-}"
 NIC1_IP="${NIC1_IP:-}"
 NIC2_IP="${NIC2_IP:-}"
 SFTP_USER="${SFTP_USER:-truenas_admin}"
 
+WEBUI_SESSION_TIMEOUT_SECONDS="${WEBUI_SESSION_TIMEOUT_SECONDS:-2147482}"
+WEBUI_SESSION_TIMEOUT_USERS="${WEBUI_SESSION_TIMEOUT_USERS:-truenas_admin}"
+
 ZVOL1_NAME="${ZVOL1_NAME:-iscsi01}"
 ZVOL2_NAME="${ZVOL2_NAME:-iscsi02}"
 ZVOL1_SIZE_GIB="${ZVOL1_SIZE_GIB:-}"
 ZVOL2_SIZE_GIB="${ZVOL2_SIZE_GIB:-}"
-ZVOL_DEFAULT_PERCENT="${ZVOL_DEFAULT_PERCENT:-90}"
+ZVOL_DEFAULT_PERCENT="${ZVOL_DEFAULT_PERCENT:-100}"
 ZVOL_VOLBLOCKSIZE="${ZVOL_VOLBLOCKSIZE:-128K}"
 ZVOL_SPARSE="${ZVOL_SPARSE:-1}"
 ZVOL_COMPRESSION="${ZVOL_COMPRESSION:-ZSTD}"
@@ -24,7 +28,8 @@ FORCE_SIZE="${FORCE_SIZE:-1}"
 # ZVOL_VOLBLOCKSIZE is the ZFS backing allocation size. The iSCSI extent
 # blocksize below is the initiator-facing logical sector size for ESXi/VMFS.
 ISCSI_EXTENT_BLOCKSIZE="${ISCSI_EXTENT_BLOCKSIZE:-512}"
-ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING="${ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING:-0}"
+# Maps to the TrueNAS UI checkbox "Disable Physical Block Size Reporting".
+ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING="${ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING:-1}"
 
 NFS_DATASET_NAME="${NFS_DATASET_NAME:-share01}"
 NFS_RECORDSIZE="${NFS_RECORDSIZE:-1M}"
@@ -210,6 +215,115 @@ ensure_service_started() {
   midclt call service.control "START" "${service_name}" '{"silent": true, "timeout": 120}' >/dev/null
 }
 
+effective_webui_session_timeout() {
+  local requested_seconds="${1}"
+  local max_seconds=2147482
+  local aal_json=""
+  local aal=""
+  local security_json=""
+  local enable_gpos_stig=""
+
+  # Middleware caps reconnect-token TTL by the current authenticator assurance
+  # level. Keep the UI timeout at or below that cap to avoid early token expiry.
+  aal_json="$(midclt call auth.get_authenticator_assurance_level 2>/dev/null || true)"
+  aal="$(printf '%s\n' "${aal_json}" | jq -r 'if type == "string" then . else empty end' 2>/dev/null || true)"
+
+  if [[ -z "${aal}" ]]; then
+    security_json="$(midclt call system.security.config 2>/dev/null || true)"
+    enable_gpos_stig="$(printf '%s\n' "${security_json}" | jq -r '.enable_gpos_stig // empty' 2>/dev/null || true)"
+    if [[ "${enable_gpos_stig}" == "true" ]]; then
+      aal="LEVEL_2"
+    fi
+  fi
+
+  case "${aal}" in
+    LEVEL_1)
+      max_seconds=2147482
+      ;;
+    LEVEL_2)
+      max_seconds=43200
+      ;;
+    LEVEL_3)
+      max_seconds=780
+      ;;
+  esac
+
+  if (( requested_seconds > max_seconds )); then
+    log "capping Web UI session timeout from ${requested_seconds} to ${max_seconds} seconds for ${aal:-unknown AAL}"
+    printf '%s\n' "${max_seconds}"
+    return
+  fi
+
+  printf '%s\n' "${requested_seconds}"
+}
+
+ensure_webui_session_timeout() {
+  local timeout_seconds="${1}"
+  local users_csv="${2}"
+
+  if ! [[ "${timeout_seconds}" =~ ^[0-9]+$ ]]; then
+    echo "WEBUI_SESSION_TIMEOUT_SECONDS must be an integer number of seconds" >&2
+    return 1
+  fi
+  if (( timeout_seconds < 30 || timeout_seconds > 2147482 )); then
+    echo "WEBUI_SESSION_TIMEOUT_SECONDS must be between 30 and 2147482 seconds" >&2
+    return 1
+  fi
+
+  timeout_seconds="$(effective_webui_session_timeout "${timeout_seconds}")"
+
+  local users_json
+  users_json="$(midclt_json_retry user.query)"
+
+  local -a usernames=()
+  mapfile -t usernames < <(
+    printf '%s\n' "${users_csv}" |
+      tr ',' '\n' |
+      awk '{$1=$1}; NF {print}'
+  )
+
+  local username
+  for username in "${usernames[@]}"; do
+    local uid
+    uid="$(printf '%s\n' "${users_json}" | jq -er --arg username "${username}" '
+      first(.[] | select(.username == $username) | .uid) // empty
+    ' 2>/dev/null || true)"
+    if [[ -z "${uid}" ]]; then
+      log "skipping Web UI session timeout for missing user ${username}"
+      continue
+    fi
+
+    # auth.set_attribute updates the session owner. This root init script has no
+    # browser session, so update the WebUI preference row for the configured login.
+    local attribute_rows
+    attribute_rows="$(midclt_json_retry datastore.query account.bsdusers_webui_attribute "[[\"uid\",\"=\",${uid}]]")"
+
+    local existing_id
+    existing_id="$(printf '%s\n' "${attribute_rows}" | jq -r '.[0].id // empty')"
+
+    local updated_attributes
+    updated_attributes="$(printf '%s\n' "${attribute_rows}" | jq --argjson lifetime "${timeout_seconds}" '
+      (.[0].attributes // {}) as $attributes
+      | $attributes + {
+          preferences: (
+            (($attributes.preferences // {}) | if type == "object" then . else {} end)
+            + {lifetime: $lifetime}
+          )
+        }
+    ')"
+
+    if [[ -n "${existing_id}" ]]; then
+      midclt call datastore.update account.bsdusers_webui_attribute "${existing_id}" \
+        "$(jq -cn --argjson attributes "${updated_attributes}" '{attributes: $attributes}')" >/dev/null
+    else
+      midclt call datastore.insert account.bsdusers_webui_attribute \
+        "$(jq -cn --argjson uid "${uid}" --argjson attributes "${updated_attributes}" '{uid: $uid, attributes: $attributes}')" >/dev/null
+    fi
+
+    log "set Web UI session timeout for ${username} to ${timeout_seconds} seconds"
+  done
+}
+
 ensure_filesystem_dataset() {
   local dataset="${1}"
   local share_type="${2}"
@@ -386,7 +500,7 @@ ensure_iscsi_extent() {
   local name="${1}"
   local disk_choice="${2}"
   local blocksize="${3:-512}"
-  local pblocksize=false
+  local pblocksize=true
 
   local existing
   existing="$(iscsi_extent_id_by_name "${name}" 2>/dev/null || true)"
@@ -395,9 +509,18 @@ ensure_iscsi_extent() {
     return
   fi
 
-  if [[ "${ISCSI_EXTENT_PHYSICAL_BLOCKSIZE_REPORTING}" == "1" ]]; then
-    pblocksize=true
-  fi
+  case "${ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING,,}" in
+    1|true|yes|on)
+      pblocksize=true
+      ;;
+    0|false|no|off)
+      pblocksize=false
+      ;;
+    *)
+      echo "ISCSI_EXTENT_DISABLE_PHYSICAL_BLOCKSIZE_REPORTING must be 1/0 or true/false" >&2
+      return 1
+      ;;
+  esac
 
   local create_result
   create_result="$(midclt call iscsi.extent.create "$(cat <<JSON
@@ -409,7 +532,7 @@ JSON
   created_id="$(printf '%s\n' "${create_result}" | json_id)"
   require_value "created iSCSI extent id for ${name}" "${created_id}"
   wait_for_resource "iSCSI extent ${name}" "iscsi_extent_id_by_name '${name}'"
-  log "created iSCSI extent ${name} (blocksize=${blocksize}, pblocksize=${pblocksize})"
+  log "created iSCSI extent ${name} (blocksize=${blocksize}, disable_physical_block_size_reporting=${pblocksize})"
   printf '%s\n' "${created_id}"
 }
 
@@ -540,6 +663,10 @@ log "using pool ${POOL_NAME} and iSCSI portal IPs ${NIC1_IP}, ${NIC2_IP}"
 NEED_START_ISCSI=0
 NEED_START_NFS=0
 NEED_START_SSH=0
+
+if [[ "${ENABLE_WEBUI_SESSION_TIMEOUT}" == "1" ]]; then
+  ensure_webui_session_timeout "${WEBUI_SESSION_TIMEOUT_SECONDS}" "${WEBUI_SESSION_TIMEOUT_USERS}"
+fi
 
 if [[ "${ENABLE_ISCSI}" == "1" ]]; then
   ZVOL1_DATASET="${POOL_NAME}/${ZVOL1_NAME}"

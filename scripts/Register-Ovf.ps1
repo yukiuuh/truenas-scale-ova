@@ -35,7 +35,7 @@ param (
 $ErrorActionPreference = "Stop"
 
 # Connect to VMware Cloud Director
-$ciConnection = Connect-CIServer -Server $CIServer
+$ciConnection = Connect-CIServer -Server $CIServer -Org $OrgName
 
 try {
     if (-not (Test-Path -LiteralPath $OvfPath -PathType Leaf)) {
@@ -66,7 +66,13 @@ try {
 
         foreach ($existingTemplate in $existingTemplates) {
             Write-Host "Removing existing vApp template '$($existingTemplate.Name)' from catalog '$CatalogName'..."
-            $existingTemplate | Remove-CIVAppTemplate -Confirm:$false
+            $previousConfirmPreference = $ConfirmPreference
+            try {
+                $ConfirmPreference = "None"
+                $existingTemplate | Remove-CIVAppTemplate
+            } finally {
+                $ConfirmPreference = $previousConfirmPreference
+            }
         }
     }
 
